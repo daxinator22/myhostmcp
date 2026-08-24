@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -25,12 +26,25 @@ import (
 )
 
 type principalKey struct{}
+type remoteAddrKey struct{}
+
+// auditMaxOutputBytes is the maximum number of bytes of stdout or stderr
+// that will be written to the audit log per exec call.  Output beyond this
+// limit is replaced by a truncation notice so the log file cannot be
+// flooded by a single large command.
+const auditMaxOutputBytes = 64 * 1024
 
 // Server hosts the MCP streamable HTTP endpoint with token auth.
 type Server struct {
 	cfg  *httpconfig.Config
 	auth *httpauth.Config
 	log  *log.Logger
+
+	// execSeq is atomically incremented for every remote_exec call and
+	// printed as a sequence number in audit log lines.  It lets an operator
+	// correlate the EXEC, EXEC_RESULT, STDOUT and STDERR lines that belong
+	// to the same call even when multiple users are active at once.
+	execSeq atomic.Int64
 
 	mu    sync.Mutex
 	users map[string]*userSessions
@@ -99,6 +113,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), principalKey{}, username)
+		ctx = context.WithValue(ctx, remoteAddrKey{}, r.RemoteAddr)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -106,17 +121,19 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 func (s *Server) authenticateRequest(r *http.Request) (username string, ok bool) {
 	if u, tok, hasBasic := r.BasicAuth(); hasBasic {
 		if err := s.auth.AuthenticateBasic(u, tok); err == nil {
+			s.log.Printf("[AUDIT] user=%q remote=%s AUTH_OK method=basic", u, r.RemoteAddr)
 			return u, true
 		}
-		s.log.Printf("http auth failed (basic): user=%q remote=%s", u, r.RemoteAddr)
+		s.log.Printf("[AUDIT] user=%q remote=%s AUTH_FAIL method=basic", u, r.RemoteAddr)
 		return "", false
 	}
 	if tok, hasBearer := bearerToken(r.Header.Get("Authorization")); hasBearer {
 		u, err := s.auth.AuthenticateBearer(tok)
 		if err == nil {
+			s.log.Printf("[AUDIT] user=%q remote=%s AUTH_OK method=bearer", u, r.RemoteAddr)
 			return u, true
 		}
-		s.log.Printf("http auth failed (bearer): remote=%s", r.RemoteAddr)
+		s.log.Printf("[AUDIT] user=%q remote=%s AUTH_FAIL method=bearer", "<unknown>", r.RemoteAddr)
 		return "", false
 	}
 	return "", false
@@ -244,6 +261,7 @@ func (s *Server) handleConnect(ctx context.Context, req *mcp.CallToolRequest, in
 		in.Host = "localhost"
 	}
 
+	remoteAddr := remoteAddrFrom(ctx)
 	s.mu.Lock()
 	us := s.ensureUserLocked(username)
 	if ex, ok := us.sessions[name]; ok {
@@ -264,6 +282,8 @@ func (s *Server) handleConnect(ctx context.Context, req *mcp.CallToolRequest, in
 			AlreadyConnected: true,
 			Transport:        "local-http",
 		}
+		s.log.Printf("[AUDIT] user=%q session=%q remote=%s CONNECT existing pid=%d ver=%q",
+			username, name, remoteAddr, ex.ready.PID, ex.ready.Version)
 		text := fmt.Sprintf("Session %q already connected for %s", name, username)
 		return s.okResult(text, out), out, nil
 	}
@@ -296,6 +316,8 @@ func (s *Server) handleConnect(ctx context.Context, req *mcp.CallToolRequest, in
 		AllowCommands: allow,
 		Transport:     "local-http",
 	}
+	s.log.Printf("[AUDIT] user=%q session=%q remote=%s CONNECT new pid=%d ver=%q hasTimeout=%v",
+		username, name, remoteAddr, out.RemotePID, out.RemoteVersion, out.HasTimeout)
 	text := fmt.Sprintf("Connected session %q for %s (remote v%s pid=%d)", name, username, out.RemoteVersion, out.RemotePID)
 	return s.okResult(text, out), out, nil
 }
@@ -325,6 +347,12 @@ func (s *Server) handleExec(ctx context.Context, req *mcp.CallToolRequest, in Ex
 		tmo = d
 	}
 
+	// Assign a monotonic sequence number so all audit lines for this exec
+	// call can be correlated in the log even under concurrent load.
+	seq := s.execSeq.Add(1)
+	s.log.Printf("[AUDIT] user=%q session=%q remote=%s EXEC seq=%d command=%q cwd=%q timeout=%s",
+		username, name, remoteAddrFrom(ctx), seq, in.Command, in.CWD, tmo)
+
 	resp, err := sess.exec(protocol.Request{
 		Type:      "exec",
 		Command:   in.Command,
@@ -333,9 +361,13 @@ func (s *Server) handleExec(ctx context.Context, req *mcp.CallToolRequest, in Ex
 		PTY:       in.PTY,
 	})
 	if err != nil {
+		s.log.Printf("[AUDIT] user=%q session=%q EXEC seq=%d ERROR error=%q",
+			username, name, seq, err.Error())
 		return s.errResult("exec failed: "+err.Error(), ExecOutput{}), ExecOutput{}, nil
 	}
 	if resp.Type == "error" {
+		s.log.Printf("[AUDIT] user=%q session=%q EXEC seq=%d ERROR error=%q",
+			username, name, seq, resp.Error)
 		return s.errResult(resp.Error, ExecOutput{}), ExecOutput{}, nil
 	}
 	out := ExecOutput{
@@ -347,6 +379,12 @@ func (s *Server) handleExec(ctx context.Context, req *mcp.CallToolRequest, in Ex
 		TimedOut:   resp.TimedOut,
 		Session:    name,
 	}
+	s.log.Printf("[AUDIT] user=%q session=%q EXEC seq=%d RESULT exit=%d duration=%dms timedOut=%v cwd=%q stdout=%dB stderr=%dB",
+		username, name, seq, out.ExitCode, out.DurationMs, out.TimedOut, out.CWD,
+		len(out.Stdout), len(out.Stderr))
+	s.auditOutput(username, name, seq, "STDOUT", out.Stdout)
+	s.auditOutput(username, name, seq, "STDERR", out.Stderr)
+
 	text := fmt.Sprintf("exit=%d timedOut=%v cwd=%q", out.ExitCode, out.TimedOut, out.CWD)
 	return s.okResult(text, out), out, nil
 }
@@ -449,6 +487,9 @@ func (s *Server) handleDisconnect(ctx context.Context, req *mcp.CallToolRequest,
 		sess.close()
 	}
 	out := DisconnectOutput{Disconnected: toClose}
+	if len(toClose) > 0 {
+		s.log.Printf("[AUDIT] user=%q DISCONNECT sessions=%q", username, toClose)
+	}
 	text := fmt.Sprintf("disconnected %d session(s)", len(toClose))
 	return s.okResult(text, out), out, nil
 }
@@ -487,6 +528,42 @@ func (s *Server) session(username, name string) (*execSession, string, error) {
 		return nil, "", fmt.Errorf("session %q not found", name)
 	}
 	return sess, name, nil
+}
+
+// remoteAddrFrom returns the client address stored by authMiddleware, or
+// "unknown" when it is not available (e.g. in unit tests).
+func remoteAddrFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(remoteAddrKey{}).(string); ok && v != "" {
+		return v
+	}
+	return "unknown"
+}
+
+// auditOutput writes stdout or stderr lines from an exec call to the audit
+// log, prefixed with stream ("STDOUT" or "STDERR") and the exec sequence
+// number.  Content beyond auditMaxOutputBytes is replaced by a truncation
+// notice so a single large command cannot flood the log file.
+func (s *Server) auditOutput(username, session string, seq int64, stream, output string) {
+	if output == "" {
+		return
+	}
+	truncated := false
+	if len(output) > auditMaxOutputBytes {
+		output = output[:auditMaxOutputBytes]
+		truncated = true
+	}
+	for _, line := range strings.Split(output, "\n") {
+		// Skip the trailing empty string produced by a final newline.
+		if line == "" {
+			continue
+		}
+		s.log.Printf("[AUDIT] user=%q session=%q EXEC seq=%d %s> %s",
+			username, session, seq, stream, line)
+	}
+	if truncated {
+		s.log.Printf("[AUDIT] user=%q session=%q EXEC seq=%d %s> [truncated at %d bytes]",
+			username, session, seq, stream, auditMaxOutputBytes)
+	}
 }
 
 func principalFrom(ctx context.Context, req *mcp.CallToolRequest) (string, error) {
