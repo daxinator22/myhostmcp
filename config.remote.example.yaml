@@ -38,6 +38,23 @@ allowCommands:
   - "journalctl -n"
   - "journalctl --no-pager"
 
+  # A mapping entry (instead of a plain string) additionally pins down
+  # specific flag values while leaving everything else about the command
+  # free-form. "command" is the literal prefix (as with the string form,
+  # split on whitespace); each requireFlags entry must appear among the
+  # command's tokens, in any order, followed by a value. A requireFlags
+  # entry with no "pattern" accepts any non-empty value; with a "pattern",
+  # the value must fully match that regexp.
+  #
+  # This allows e.g. `panelssh-static -panel 42 -cmd "systemctl status nginx"`
+  # (any flag order, extra flags allowed) but rejects a non-numeric -panel
+  # or a missing -cmd.
+  - command: "panelssh-static"
+    requireFlags:
+      - flag: "-panel"
+        pattern: "^[0-9]+$"
+      - flag: "-cmd"
+
 # ----------------------------------------------------------------------------
 # Group-based allowlists (optional) — extra commands for users in a given
 # system group. The effective allowlist for a user is the UNION of the base

@@ -226,8 +226,8 @@ func printResp(r protocol.Response) {
 		}
 	case "allowlist":
 		fmt.Printf("allowlist: %d entries\n", len(r.AllowCommands))
-		for _, toks := range r.AllowCommands {
-			fmt.Printf("  - %s\n", strings.Join(toks, " "))
+		for _, rule := range r.AllowCommands {
+			fmt.Printf("  - %s\n", rule.String())
 		}
 	case "error":
 		fmt.Printf("ERROR: %s\n", r.Error)

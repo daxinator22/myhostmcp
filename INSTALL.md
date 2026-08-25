@@ -106,6 +106,31 @@ allowCommands:
   - "systemctl restart"  # but NOT `systemctl stop …`
 ```
 
+#### Requiring specific flags
+
+A plain string entry is a literal prefix: everything after it is
+unconstrained. When a command's *later* flags matter too — a numeric ID, a
+required sub-command — use the mapping form instead of a string, with a
+`command` prefix plus `requireFlags`:
+
+```yaml
+allowCommands:
+  - command: "panelssh-static"
+    requireFlags:
+      - flag: "-panel"
+        pattern: "^[0-9]+$"   # value must fully match this regexp
+      - flag: "-cmd"          # no pattern = any non-empty value
+```
+
+This allows `panelssh-static -panel 42 -cmd "systemctl status nginx"`, in any
+flag order and with any additional flags mixed in, but rejects it if `-panel`
+is missing, non-numeric, or `-cmd` has no value. `requireFlags` only pins down
+the flags it lists — it does not restrict what's inside `-cmd`'s value or
+forbid other flags; the flag order relative to `command` and to each other
+doesn't matter. Malformed entries (missing `command`, a `requireFlags` entry
+with no `flag`, or an unparsable `pattern`) are a hard config error at load
+time, not a silent narrowing.
+
 #### Group-based allowlists
 
 Use the `groups` key to grant **additional** commands to users who are members

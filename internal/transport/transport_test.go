@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"myhostmcp/internal/allowlist"
 	"myhostmcp/internal/protocol"
 	"myhostmcp/internal/version"
 )
@@ -358,7 +359,7 @@ func TestParseReportedHash(t *testing.T) {
 	}
 }
 
-func safeAllowedCommand(allow [][]string) string {
+func safeAllowedCommand(allow []allowlist.Rule) string {
 	safe := map[string]string{
 		"df":    "df -h /",
 		"free":  "free",
@@ -369,11 +370,11 @@ func safeAllowedCommand(allow [][]string) string {
 		"pwd":   "pwd",
 		"uname": "uname -s",
 	}
-	for _, toks := range allow {
-		if len(toks) == 0 {
+	for _, r := range allow {
+		if len(r.Prefix) == 0 {
 			continue
 		}
-		if cmd, ok := safe[toks[0]]; ok {
+		if cmd, ok := safe[r.Prefix[0]]; ok {
 			return cmd
 		}
 	}

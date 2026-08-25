@@ -3,10 +3,13 @@
 //
 // If the allowlist is empty, every command is permitted (unrestricted mode).
 // When non-empty, every segment of the command (split at control operators
-// such as ;, |, &&, ||) must begin with the tokens of one allowlist entry.
-// Constructs that could bypass the allowlist — command substitution ($(...) or
-// backtick) and I/O redirection (<, >, >>, <<, >&, <&) — are rejected when an
-// allowlist is active.
+// such as ;, |, &&, ||) must begin with the tokens of one allowlist entry
+// (Rule.Prefix). A Rule may additionally require specific flags — e.g.
+// "-panel" must be present with a numeric value — via RequireFlags; anything
+// not covered by a requirement is unconstrained. Constructs that could bypass
+// the allowlist — command substitution ($(...) or backtick) and I/O
+// redirection (<, >, >>, <<, >&, <&) — are rejected when an allowlist is
+// active.
 //
 // This is a safety heuristic, not a formal shell parser. It is deliberately
 // conservative: it may reject unusual but legitimate commands. With no
@@ -15,12 +18,52 @@ package allowlist
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
+// FlagRequirement demands that a flag appear somewhere in the matched
+// command, followed by a value. If Pattern is empty, any non-empty value
+// satisfies the requirement; otherwise the value must fully match the regexp
+// (anchored as if wrapped in ^(?:...)$).
+type FlagRequirement struct {
+	Flag    string `json:"flag"`
+	Pattern string `json:"pattern,omitempty"`
+}
+
+// Rule is one allowlist entry. A command segment matches a Rule if its
+// leading tokens equal Prefix (the same literal-prefix matching as before),
+// AND, for every entry in RequireFlags, that flag appears among the
+// segment's tokens (anywhere, not just immediately after the prefix)
+// followed by a value satisfying its Pattern. Flags and arguments not
+// mentioned in RequireFlags are unconstrained: they may appear in any order,
+// anywhere, or not at all.
+//
+// A Rule with no RequireFlags behaves exactly like the old plain
+// literal-prefix entry.
+type Rule struct {
+	Prefix       []string          `json:"prefix"`
+	RequireFlags []FlagRequirement `json:"requireFlags,omitempty"`
+}
+
+// String renders r for diagnostics/display, e.g.:
+//
+//	panelssh-static -panel <^[0-9]+$> -cmd <value>
+func (r Rule) String() string {
+	s := strings.Join(r.Prefix, " ")
+	for _, req := range r.RequireFlags {
+		if req.Pattern != "" {
+			s += fmt.Sprintf(" %s <%s>", req.Flag, req.Pattern)
+		} else {
+			s += fmt.Sprintf(" %s <value>", req.Flag)
+		}
+	}
+	return s
+}
+
 // Validate returns nil if cmd is permitted by the allowlist, or an error
 // explaining why it is not.
-func Validate(cmd string, allowed [][]string) error {
+func Validate(cmd string, allowed []Rule) error {
 	if len(allowed) == 0 {
 		return nil // unrestricted
 	}
@@ -55,19 +98,55 @@ func Validate(cmd string, allowed [][]string) error {
 	return nil
 }
 
-func matchesAny(toks []string, allowed [][]string) bool {
-	for _, a := range allowed {
-		if len(a) == 0 || len(toks) < len(a) {
+func matchesAny(toks []string, allowed []Rule) bool {
+	for _, r := range allowed {
+		if matchesRule(toks, r) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesRule(toks []string, r Rule) bool {
+	a := r.Prefix
+	if len(a) == 0 || len(toks) < len(a) {
+		return false
+	}
+	for i := range a {
+		if toks[i] != a[i] {
+			return false
+		}
+	}
+	for _, req := range r.RequireFlags {
+		if !hasRequiredFlag(toks, req) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasRequiredFlag reports whether toks contains req.Flag followed by a
+// value satisfying req.Pattern (or any non-empty value, if Pattern is
+// empty). An invalid regexp never matches — such a rule can never be
+// satisfied, which is the safe failure mode.
+func hasRequiredFlag(toks []string, req FlagRequirement) bool {
+	var re *regexp.Regexp
+	if req.Pattern != "" {
+		var err error
+		re, err = regexp.Compile("^(?:" + req.Pattern + ")$")
+		if err != nil {
+			return false
+		}
+	}
+	for i := 0; i+1 < len(toks); i++ {
+		if toks[i] != req.Flag {
 			continue
 		}
-		ok := true
-		for i := range a {
-			if toks[i] != a[i] {
-				ok = false
-				break
-			}
+		val := toks[i+1]
+		if val == "" {
+			continue
 		}
-		if ok {
+		if re == nil || re.MatchString(val) {
 			return true
 		}
 	}

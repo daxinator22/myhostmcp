@@ -2,11 +2,19 @@ package allowlist
 
 import "testing"
 
-func TestValidate(t *testing.T) {
-	allow := [][]string{
-		{"df"}, {"free"}, {"ps"}, {"ss"}, {"echo"}, {"cd"}, {"pwd"},
-		{"systemctl", "restart"}, {"systemctl", "status"},
+func rules(prefixes ...[]string) []Rule {
+	out := make([]Rule, len(prefixes))
+	for i, p := range prefixes {
+		out[i] = Rule{Prefix: p}
 	}
+	return out
+}
+
+func TestValidate(t *testing.T) {
+	allow := rules(
+		[]string{"df"}, []string{"free"}, []string{"ps"}, []string{"ss"}, []string{"echo"}, []string{"cd"}, []string{"pwd"},
+		[]string{"systemctl", "restart"}, []string{"systemctl", "status"},
+	)
 
 	// These cases are checked against the `allow` list above. (Every case is
 	// also checked against a nil allowlist first, which must always allow.)
@@ -74,9 +82,58 @@ func TestValidate(t *testing.T) {
 
 func TestValidatePipelineBothAllowed(t *testing.T) {
 	// with grep also allowed, the pipeline is permitted.
-	allow := [][]string{{"ps"}, {"grep"}}
+	allow := rules([]string{"ps"}, []string{"grep"})
 	if err := Validate("ps aux | grep nginx", allow); err != nil {
 		t.Fatalf("expected allowed, got: %v", err)
+	}
+}
+
+func TestValidateRequireFlags(t *testing.T) {
+	allow := []Rule{
+		{
+			Prefix: []string{"panelssh-static"},
+			RequireFlags: []FlagRequirement{
+				{Flag: "-panel", Pattern: "[0-9]+"},
+				{Flag: "-cmd"},
+			},
+		},
+	}
+
+	cases := []struct {
+		name string
+		cmd  string
+		ok   bool
+	}{
+		{"both required flags present, numeric panel", `panelssh-static -panel 42 -cmd "systemctl status nginx"`, true},
+		{"extra optional flags allowed anywhere", `panelssh-static -v -panel 42 -timeout 30 -cmd "ls" -debug`, true},
+		{"flags in any order", `panelssh-static -cmd "ls" -panel 7`, true},
+		{"non-numeric panel rejected", `panelssh-static -panel abc -cmd "ls"`, false},
+		{"missing -cmd rejected", `panelssh-static -panel 42`, false},
+		{"missing -panel rejected", `panelssh-static -cmd "ls"`, false},
+		{"missing both rejected", `panelssh-static`, false},
+		{"wrong base command rejected", `panelssh-dynamic -panel 42 -cmd "ls"`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Validate(c.cmd, allow)
+			switch {
+			case c.ok && err != nil:
+				t.Fatalf("expected allowed, got error: %v", err)
+			case !c.ok && err == nil:
+				t.Fatalf("expected rejection, but command was allowed")
+			}
+		})
+	}
+}
+
+func TestValidateRequireFlagsInvalidPatternNeverMatches(t *testing.T) {
+	// An unparsable regexp must be a safe failure (never matches), not a panic
+	// or an accidental "any value" pass-through.
+	allow := []Rule{
+		{Prefix: []string{"panelssh-static"}, RequireFlags: []FlagRequirement{{Flag: "-panel", Pattern: "("}}},
+	}
+	if err := Validate(`panelssh-static -panel 42`, allow); err == nil {
+		t.Fatal("expected rejection with an invalid pattern, got allowed")
 	}
 }
 

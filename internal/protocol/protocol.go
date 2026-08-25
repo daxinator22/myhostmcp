@@ -6,6 +6,8 @@
 // local half speaks this private protocol to the remote half.
 package protocol
 
+import "myhostmcp/internal/allowlist"
+
 // APC framing (recording-friendly mode). When enabled, each Response is wrapped
 // in a terminal Application Program Command string: ESC '_' <payload> ESC '\'.
 // Terminal emulators — including xterm.js, which Teleport's session player uses
@@ -24,9 +26,9 @@ const (
 
 // Request is sent from the local half to the remote.
 //
-//   type = "exec"             : run a command in the persistent shell
-//   type = "allowed_commands" : ask the remote for the allowlist it enforces
-//   type = "shutdown"          : close the remote cleanly
+//	type = "exec"             : run a command in the persistent shell
+//	type = "allowed_commands" : ask the remote for the allowlist it enforces
+//	type = "shutdown"          : close the remote cleanly
 //
 // There is no "configure" request: the allowlist is read by the remote from
 // its own config file (see package remoteconfig) and is immutable for the life
@@ -42,10 +44,10 @@ type Request struct {
 
 // Response is sent from the remote to the local half.
 //
-//   type = "result"    : a command finished (see ExitCode/Stdout/Stderr/CWD)
-//   type = "allowlist" : reply to "allowed_commands" (see AllowCommands)
-//   type = "log"       : informational (ready/bye)
-//   type = "error"     : the request could not be honoured (see Error)
+//	type = "result"    : a command finished (see ExitCode/Stdout/Stderr/CWD)
+//	type = "allowlist" : reply to "allowed_commands" (see AllowCommands)
+//	type = "log"       : informational (ready/bye)
+//	type = "error"     : the request could not be honoured (see Error)
 type Response struct {
 	ID   int64  `json:"id,omitempty"`
 	Type string `json:"type"`
@@ -59,12 +61,12 @@ type Response struct {
 	TimedOut   bool   `json:"timedOut,omitempty"`
 
 	// allowlist fields (type = "allowlist")
-	AllowCommands [][]string `json:"allowCommands,omitempty"`
+	AllowCommands []allowlist.Rule `json:"allowCommands,omitempty"`
 
 	// log fields
 	Msg        string `json:"msg,omitempty"`
-	Version    string `json:"version,omitempty"` // reported in "ready"
-	PID        int    `json:"pid,omitempty"`     // reported in "ready"
+	Version    string `json:"version,omitempty"`    // reported in "ready"
+	PID        int    `json:"pid,omitempty"`        // reported in "ready"
 	HasTimeout bool   `json:"hasTimeout,omitempty"` // reported in "ready": timeout(1) available?
 
 	// error fields

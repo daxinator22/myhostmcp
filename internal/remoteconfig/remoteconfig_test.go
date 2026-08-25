@@ -24,10 +24,10 @@ func TestLoadMissingFileUsesDefault(t *testing.T) {
 		t.Fatalf("missing file: got %d entries, want default %d", len(c.AllowCommands), len(DefaultAllowCommands))
 	}
 	// Must equal the documented safe default, in order.
-	want := [][]string{{"df"}, {"ss"}, {"top"}, {"free"}, {"ls"}}
+	want := []string{"df", "ss", "top", "free", "ls"}
 	for i, w := range want {
-		if len(c.AllowCommands[i]) != 1 || c.AllowCommands[i][0] != w[0] {
-			t.Fatalf("default entry %d = %v, want %v", i, c.AllowCommands[i], w)
+		if len(c.AllowCommands[i].Prefix) != 1 || c.AllowCommands[i].Prefix[0] != w {
+			t.Fatalf("default entry %d = %v, want [%s]", i, c.AllowCommands[i], w)
 		}
 	}
 }
@@ -44,10 +44,10 @@ func TestLoadPresentFile(t *testing.T) {
 	}
 	// "systemctl restart" is a single YAML string, split on whitespace into
 	// two tokens at load time.
-	if got := c.AllowCommands[1]; len(got) != 2 || got[0] != "systemctl" || got[1] != "restart" {
+	if got := c.AllowCommands[1].Prefix; len(got) != 2 || got[0] != "systemctl" || got[1] != "restart" {
 		t.Fatalf("entry 1 = %v, want [systemctl restart]", got)
 	}
-	if got := c.AllowCommands[0]; len(got) != 1 || got[0] != "df" {
+	if got := c.AllowCommands[0].Prefix; len(got) != 1 || got[0] != "df" {
 		t.Fatalf("entry 0 = %v, want [df]", got)
 	}
 }
@@ -72,6 +72,78 @@ func TestLoadAbsentFieldUsesDefault(t *testing.T) {
 	}
 	if len(c.AllowCommands) != len(DefaultAllowCommands) {
 		t.Fatalf("absent field: got %d, want default %d", len(c.AllowCommands), len(DefaultAllowCommands))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Structured (mapping) allowCommands entries
+// ---------------------------------------------------------------------------
+
+func TestLoadStructuredEntry(t *testing.T) {
+	p := writeFile(t, t.TempDir(), "config.yaml", `
+allowCommands:
+  - df
+  - command: "panelssh-static"
+    requireFlags:
+      - flag: "-panel"
+        pattern: "^[0-9]+$"
+      - flag: "-cmd"
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.AllowCommands) != 2 {
+		t.Fatalf("got %d entries, want 2", len(c.AllowCommands))
+	}
+	r := c.AllowCommands[1]
+	if len(r.Prefix) != 1 || r.Prefix[0] != "panelssh-static" {
+		t.Fatalf("Prefix = %v, want [panelssh-static]", r.Prefix)
+	}
+	if len(r.RequireFlags) != 2 {
+		t.Fatalf("RequireFlags = %v, want 2 entries", r.RequireFlags)
+	}
+	if r.RequireFlags[0].Flag != "-panel" || r.RequireFlags[0].Pattern != "^[0-9]+$" {
+		t.Fatalf("RequireFlags[0] = %+v, want {-panel ^[0-9]+$}", r.RequireFlags[0])
+	}
+	if r.RequireFlags[1].Flag != "-cmd" || r.RequireFlags[1].Pattern != "" {
+		t.Fatalf("RequireFlags[1] = %+v, want {-cmd \"\"}", r.RequireFlags[1])
+	}
+}
+
+func TestLoadStructuredEntryMissingCommandIsHardError(t *testing.T) {
+	p := writeFile(t, t.TempDir(), "config.yaml", `
+allowCommands:
+  - requireFlags:
+      - flag: "-panel"
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("entry with no command should be a hard error")
+	}
+}
+
+func TestLoadStructuredEntryMissingFlagIsHardError(t *testing.T) {
+	p := writeFile(t, t.TempDir(), "config.yaml", `
+allowCommands:
+  - command: "panelssh-static"
+    requireFlags:
+      - pattern: "^[0-9]+$"
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("requireFlags entry with no flag should be a hard error")
+	}
+}
+
+func TestLoadStructuredEntryBadPatternIsHardError(t *testing.T) {
+	p := writeFile(t, t.TempDir(), "config.yaml", `
+allowCommands:
+  - command: "panelssh-static"
+    requireFlags:
+      - flag: "-panel"
+        pattern: "("
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("unparsable pattern should be a hard error")
 	}
 }
 
@@ -131,17 +203,17 @@ groups:
 	if len(ops) != 2 {
 		t.Fatalf("operations: got %d entries, want 2", len(ops))
 	}
-	if got := ops[0]; len(got) != 1 || got[0] != "systemctl" {
+	if got := ops[0].Prefix; len(got) != 1 || got[0] != "systemctl" {
 		t.Fatalf("operations[0] = %v, want [systemctl]", got)
 	}
-	if got := ops[1]; len(got) != 2 || got[0] != "journalctl" || got[1] != "-n" {
+	if got := ops[1].Prefix; len(got) != 2 || got[0] != "journalctl" || got[1] != "-n" {
 		t.Fatalf("operations[1] = %v, want [journalctl -n]", got)
 	}
 	web, ok := c.GroupAllowCommands["web"]
 	if !ok {
 		t.Fatal("web group missing from GroupAllowCommands")
 	}
-	if len(web) != 1 || len(web[0]) != 2 || web[0][0] != "nginx" || web[0][1] != "-t" {
+	if len(web) != 1 || len(web[0].Prefix) != 2 || web[0].Prefix[0] != "nginx" || web[0].Prefix[1] != "-t" {
 		t.Fatalf("web[0] = %v, want [nginx -t]", web[0])
 	}
 }
@@ -203,7 +275,7 @@ groups:
 		t.Fatalf("Load: %v", err)
 	}
 	got := c.Resolve(nil)
-	if len(got) != 1 || got[0][0] != "df" {
+	if len(got) != 1 || got[0].Prefix[0] != "df" {
 		t.Fatalf("Resolve(nil) = %v, want [[df]]", got)
 	}
 }
@@ -224,7 +296,7 @@ groups:
 	}
 	// "staff" and "sudo" are not configured.
 	got := c.Resolve([]string{"staff", "sudo"})
-	if len(got) != 1 || got[0][0] != "df" {
+	if len(got) != 1 || got[0].Prefix[0] != "df" {
 		t.Fatalf("Resolve(unknown groups) = %v, want [[df]]", got)
 	}
 }
@@ -249,13 +321,13 @@ groups:
 	if len(got) != 3 {
 		t.Fatalf("Resolve([operations]) = %d entries, want 3: %v", len(got), got)
 	}
-	if got[0][0] != "df" {
+	if got[0].Prefix[0] != "df" {
 		t.Fatalf("entry 0 = %v, want [df]", got[0])
 	}
-	if got[1][0] != "systemctl" {
+	if got[1].Prefix[0] != "systemctl" {
 		t.Fatalf("entry 1 = %v, want [systemctl]", got[1])
 	}
-	if got[2][0] != "journalctl" {
+	if got[2].Prefix[0] != "journalctl" {
 		t.Fatalf("entry 2 = %v, want [journalctl]", got[2])
 	}
 }

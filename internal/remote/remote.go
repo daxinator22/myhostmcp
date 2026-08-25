@@ -78,7 +78,7 @@ type Executor struct {
 	hasTimeout      bool   // timeout(1) is available on the host
 	nonce           string // per-session secret tagging genuine APC frames
 
-	allow [][]string // immutable after New; loaded from the remote config file
+	allow []allowlist.Rule // immutable after New; loaded from the remote config file
 }
 
 // New creates an executor that reads requests from r and writes responses to w.

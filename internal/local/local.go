@@ -27,6 +27,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"myhostmcp/internal/allowlist"
 	"myhostmcp/internal/config"
 	"myhostmcp/internal/protocol"
 	"myhostmcp/internal/transport"
@@ -116,19 +117,19 @@ type ConnectInput struct {
 
 // ConnectOutput is the structured result of remote_connect.
 type ConnectOutput struct {
-	Session          string     `json:"session"`
-	Host             string     `json:"host"`
-	User             string     `json:"user,omitempty"`
-	Port             int        `json:"port,omitempty"`
-	Platform         string     `json:"platform,omitempty"`
-	RemotePID        int        `json:"remotePid"`
-	RemoteVersion    string     `json:"remoteVersion"`
-	HasTimeout       bool       `json:"hasTimeout"`
-	AllowCommands    [][]string `json:"allowCommands,omitempty"` // the remote's enforced allowlist
-	AlreadyConnected bool       `json:"alreadyConnected,omitempty"`
-	Transport        string     `json:"transport,omitempty"`    // "ssh" or "tsh"
-	LoginNote        string     `json:"loginNote,omitempty"`   // non-empty when tsh login was performed
-	FallbackNote     string     `json:"fallbackNote,omitempty"` // non-empty when tsh failed and ssh was used
+	Session          string           `json:"session"`
+	Host             string           `json:"host"`
+	User             string           `json:"user,omitempty"`
+	Port             int              `json:"port,omitempty"`
+	Platform         string           `json:"platform,omitempty"`
+	RemotePID        int              `json:"remotePid"`
+	RemoteVersion    string           `json:"remoteVersion"`
+	HasTimeout       bool             `json:"hasTimeout"`
+	AllowCommands    []allowlist.Rule `json:"allowCommands,omitempty"` // the remote's enforced allowlist
+	AlreadyConnected bool             `json:"alreadyConnected,omitempty"`
+	Transport        string           `json:"transport,omitempty"`    // "ssh" or "tsh"
+	LoginNote        string           `json:"loginNote,omitempty"`    // non-empty when tsh login was performed
+	FallbackNote     string           `json:"fallbackNote,omitempty"` // non-empty when tsh failed and ssh was used
 }
 
 // ExecInput is the argument to remote_exec.
@@ -188,8 +189,8 @@ type AllowedCommandsInput struct {
 
 // AllowedCommandsOutput is the structured result of remote_allowed_commands.
 type AllowedCommandsOutput struct {
-	Session       string     `json:"session"`
-	AllowCommands [][]string `json:"allowCommands"`
+	Session       string           `json:"session"`
+	AllowCommands []allowlist.Rule `json:"allowCommands"`
 }
 
 // ----- handlers ----------------------------------------------------------------
@@ -426,7 +427,7 @@ func (m *Manager) handleAllowedCommands(ctx context.Context, _ *mcp.CallToolRequ
 	var b strings.Builder
 	fmt.Fprintf(&b, "session %q enforces %d allowed command(s):", name, len(allow))
 	for _, toks := range allow {
-		b.WriteString("\n  - " + strings.Join(toks, " "))
+		b.WriteString("\n  - " + toks.String())
 	}
 	return m.okResult(b.String(), out), out, nil
 }
@@ -507,7 +508,7 @@ func (m *Manager) session(name string) (*transport.Session, string, error) {
 // queryAllowed sends an allowed_commands request to a session and returns the
 // allowlist the remote enforces. The remote always has the final say over what
 // remote_exec may run; the local half cannot change it.
-func (m *Manager) queryAllowed(s *transport.Session) ([][]string, error) {
+func (m *Manager) queryAllowed(s *transport.Session) ([]allowlist.Rule, error) {
 	resp, err := s.RoundTrip(&protocol.Request{Type: "allowed_commands"})
 	if err != nil {
 		return nil, err

@@ -18,6 +18,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"myhostmcp/internal/allowlist"
 	"myhostmcp/internal/httpauth"
 	"myhostmcp/internal/httpconfig"
 	"myhostmcp/internal/protocol"
@@ -184,15 +185,15 @@ type ConnectInput struct {
 }
 
 type ConnectOutput struct {
-	Session          string     `json:"session"`
-	Host             string     `json:"host"`
-	User             string     `json:"user,omitempty"`
-	RemotePID        int        `json:"remotePid"`
-	RemoteVersion    string     `json:"remoteVersion"`
-	HasTimeout       bool       `json:"hasTimeout"`
-	AllowCommands    [][]string `json:"allowCommands,omitempty"`
-	AlreadyConnected bool       `json:"alreadyConnected,omitempty"`
-	Transport        string     `json:"transport,omitempty"`
+	Session          string           `json:"session"`
+	Host             string           `json:"host"`
+	User             string           `json:"user,omitempty"`
+	RemotePID        int              `json:"remotePid"`
+	RemoteVersion    string           `json:"remoteVersion"`
+	HasTimeout       bool             `json:"hasTimeout"`
+	AllowCommands    []allowlist.Rule `json:"allowCommands,omitempty"`
+	AlreadyConnected bool             `json:"alreadyConnected,omitempty"`
+	Transport        string           `json:"transport,omitempty"`
 }
 
 type ExecInput struct {
@@ -218,8 +219,8 @@ type AllowedCommandsInput struct {
 }
 
 type AllowedCommandsOutput struct {
-	Session       string     `json:"session"`
-	AllowCommands [][]string `json:"allowCommands"`
+	Session       string           `json:"session"`
+	AllowCommands []allowlist.Rule `json:"allowCommands"`
 }
 
 type StatusOutput struct {
@@ -703,7 +704,7 @@ func (s *execSession) exec(req protocol.Request) (protocol.Response, error) {
 	}
 }
 
-func (s *execSession) allowedCommands() ([][]string, error) {
+func (s *execSession) allowedCommands() ([]allowlist.Rule, error) {
 	resp, err := s.exec(protocol.Request{Type: "allowed_commands"})
 	if err != nil {
 		return nil, err
