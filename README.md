@@ -67,7 +67,7 @@ internal/local/                  stdio MCP server + tool handlers + session mgmt
 internal/httpconfig/             HTTPS server-mode config (/etc/myhostmcp/http-server.yaml)
 internal/httpauth/               HTTP token auth config loader (/etc/myhostmcp/http-auth.yaml)
 internal/httpserver/             HTTPS MCP server mode (streamable HTTP + token auth)
-internal/embed/                  go:embed of cross-compiled remote binaries (build.sh-generated)
+internal/embed/                  go:embed of cross-compiled remote binaries (build.sh-generated, gitignored — run build.sh before building locally)
 build.sh                         cross-compile remote targets → embed → build local
 examples/stdio_client/           example MCP client that spawns `myhostmcp local` over stdio
 examples/pi-extension/           pi extension (pi has no built-in MCP; this bridges to `myhostmcp local`)
@@ -115,9 +115,16 @@ examples/pi-extension/           pi extension (pi has no built-in MCP; this brid
 Full build, configuration, and agent-wiring instructions (Claude Code, OpenCode,
 pi) are in **[INSTALL.md](INSTALL.md)**. Quick start:
 
+> **`./build.sh` is required — `go build ./...` alone is not enough.**
+> The local binary embeds cross-compiled remote executors for seven
+> OS/arch targets (linux/amd64, arm64, arm; darwin/amd64, arm64;
+> freebsd/amd64, arm64). These are built by `build.sh` and are
+> **gitignored** (not committed). Without them, `remote_connect` fails
+> immediately with *"no remote binaries are embedded — run ./build.sh"*.
+
 ```sh
-./build.sh                               # build local + all remote targets
-build/myhostmcp demo                     # executor self-test (no SSH)
+./build.sh                               # cross-compile remote targets, embed, build local binary
+build/myhostmcp demo                     # executor self-test (no SSH needed)
 go run ./examples/stdio_client -binary ./build/myhostmcp -host 127.0.0.1
 ```
 
