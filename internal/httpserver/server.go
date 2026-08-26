@@ -18,6 +18,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"myhostmcp/internal/agentinstr"
 	"myhostmcp/internal/allowlist"
 	"myhostmcp/internal/httpauth"
 	"myhostmcp/internal/httpconfig"
@@ -147,7 +148,10 @@ func (s *Server) authChallenge(w http.ResponseWriter) {
 }
 
 func (s *Server) buildMCPServer() *mcp.Server {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "myhostmcp-http", Version: version.Version}, nil)
+	srv := mcp.NewServer(
+		&mcp.Implementation{Name: "myhostmcp-http", Version: version.Version},
+		&mcp.ServerOptions{Instructions: agentinstr.Instructions},
+	)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "remote_connect",

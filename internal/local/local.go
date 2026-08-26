@@ -27,6 +27,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"myhostmcp/internal/agentinstr"
 	"myhostmcp/internal/allowlist"
 	"myhostmcp/internal/config"
 	"myhostmcp/internal/protocol"
@@ -71,7 +72,10 @@ func (m *Manager) Run(ctx context.Context) error {
 // buildServer constructs the MCP server with the five remote_* tools. It is
 // also used by tests to attach an in-memory transport instead of stdio.
 func (m *Manager) buildServer() *mcp.Server {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "myhostmcp", Version: version.Version}, nil)
+	srv := mcp.NewServer(
+		&mcp.Implementation{Name: "myhostmcp", Version: version.Version},
+		&mcp.ServerOptions{Instructions: agentinstr.Instructions},
+	)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "remote_connect",
